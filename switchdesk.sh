@@ -1,22 +1,39 @@
 #!/usr/bin/env bash
 #
 # switchdesk - Universal Desktop Environment Installer & Switcher
+# Author: zengmax68
 # Works on systemd-based distros with dnf/apt/pacman/zypper.
 #
-# Features:
-#   - Detect installed desktop sessions
-#   - Install common DEs (GNOME, KDE, XFCE, Cinnamon, MATE, LXQt)
-#   - Switch display manager to match target DE
 
 set -e
 
+# -----------------------------
+# Colours
+# -----------------------------
+GREEN="\e[32m"
+YELLOW="\e[33m"
+RED="\e[31m"
+BLUE="\e[34m"
+RESET="\e[0m"
+
+log() { echo -e "${BLUE}[switchdesk]${RESET} $1"; }
+ok()  { echo -e "${GREEN}[OK]${RESET} $1"; }
+warn(){ echo -e "${YELLOW}[WARN]${RESET} $1"; }
+err() { echo -e "${RED}[ERROR]${RESET} $1"; }
+
+# -----------------------------
+# Root check
+# -----------------------------
 require_root() {
     if [ "$EUID" -ne 0 ]; then
-        echo "Please run as root (use sudo)."
+        err "Please run as root (use sudo)."
         exit 1
     fi
 }
 
+# -----------------------------
+# Detect package manager
+# -----------------------------
 detect_pkg_manager() {
     if command -v dnf >/dev/null 2>&1; then
         PKG_MGR="dnf"
@@ -27,15 +44,17 @@ detect_pkg_manager() {
     elif command -v zypper >/dev/null 2>&1; then
         PKG_MGR="zypper"
     else
-        echo "Unsupported distro: no known package manager found."
+        err "Unsupported distro: no known package manager found."
         exit 1
     fi
 }
 
+# -----------------------------
+# Install a desktop environment
+# -----------------------------
 install_de() {
     local de="$1"
-    echo "Installing desktop environment: $de"
-    echo
+    log "Installing desktop environment: $de"
 
     case "$PKG_MGR" in
         dnf)
@@ -46,7 +65,7 @@ install_de() {
                 cinnamon) dnf groupinstall -y "Cinnamon Desktop" ;;
                 mate)     dnf groupinstall -y "MATE Desktop" ;;
                 lxqt)     dnf groupinstall -y "LXQt Desktop" ;;
-                *) echo "Unknown DE: $de"; exit 1 ;;
+                *) err "Unknown DE: $de"; exit 1 ;;
             esac
             ;;
         apt)
@@ -58,7 +77,7 @@ install_de() {
                 cinnamon) apt install -y cinnamon ;;
                 mate)     apt install -y mate-desktop-environment ;;
                 lxqt)     apt install -y lxqt ;;
-                *) echo "Unknown DE: $de"; exit 1 ;;
+                *) err "Unknown DE: $de"; exit 1 ;;
             esac
             ;;
         pacman)
@@ -69,7 +88,7 @@ install_de() {
                 cinnamon) pacman -Syu --noconfirm cinnamon ;;
                 mate)     pacman -Syu --noconfirm mate mate-extra ;;
                 lxqt)     pacman -Syu --noconfirm lxqt ;;
-                *) echo "Unknown DE: $de"; exit 1 ;;
+                *) err "Unknown DE: $de"; exit 1 ;;
             esac
             ;;
         zypper)
@@ -80,17 +99,19 @@ install_de() {
                 cinnamon) zypper install cinnamon ;;
                 mate)     zypper install mate-desktop ;;
                 lxqt)     zypper install lxqt ;;
-                *) echo "Unknown DE: $de"; exit 1 ;;
+                *) err "Unknown DE: $de"; exit 1 ;;
             esac
             ;;
     esac
 
-    echo
-    echo "Install complete for: $de"
+    ok "Install complete for: $de"
 }
 
+# -----------------------------
+# Detect installed sessions
+# -----------------------------
 detect_installed_des() {
-    echo "Detected desktop sessions:"
+    log "Detected desktop sessions:"
     if [ -d /usr/share/xsessions ]; then
         ls /usr/share/xsessions | sed 's/\.desktop$//' | sed 's/^/- /'
     fi
@@ -99,6 +120,21 @@ detect_installed_des() {
     fi
 }
 
+# -----------------------------
+# Detect installed display managers
+# -----------------------------
+detect_installed_dm() {
+    log "Detected installed display managers:"
+    for dm in gdm sddm lightdm; do
+        if command -v "$dm" >/dev/null 2>&1; then
+            echo "- $dm"
+        fi
+    done
+}
+
+# -----------------------------
+# Switch display manager
+# -----------------------------
 switch_dm_for_de() {
     local de="$1"
     local target_dm=""
@@ -110,105 +146,83 @@ switch_dm_for_de() {
             if command -v lightdm >/dev/null 2>&1; then
                 target_dm="lightdm"
             else
-                echo "No dedicated DM chosen for $de; keeping current display manager."
-                return
+                warn "LightDM not installed. Installing..."
+                case "$PKG_MGR" in
+                    apt) apt install -y lightdm ;;
+                    dnf) dnf install -y lightdm ;;
+                    pacman) pacman -Syu --noconfirm lightdm ;;
+                    zypper) zypper install -y lightdm ;;
+                esac
+                target_dm="lightdm"
             fi
             ;;
         *)
-            echo "Unknown DE for DM switch: $de"
-            return
+            err "Unknown DE: $de"
+            exit 1
             ;;
     esac
 
-    echo "Switching display manager to: $target_dm"
-    echo
+    log "Switching display manager to: $target_dm"
 
-    # Disable common DMs
     for dm in gdm sddm lightdm; do
-        if systemctl is-enabled "$dm" >/dev/null 2>&1; then
-            systemctl disable "$dm" >/dev/null 2>&1 || true
-        fi
+        systemctl disable "$dm" >/dev/null 2>&1 || true
     done
 
-    systemctl enable "$target_dm" >/dev/null 2>&1 || {
-        echo "Failed to enable $target_dm. Is it installed?"
-        exit 1
-    }
+    systemctl enable "$target_dm" >/dev/null 2>&1
+    systemctl set-default graphical.target >/dev/null 2>&1
 
-    systemctl set-default graphical.target >/dev/null 2>&1 || true
-
-    echo "Desktop switched, please save your work and reboot."
-    echo
-    read -p "Reboot now? [y/n] " answer
-
-    case "$answer" in
-        [Yy]* )
-            echo "Rebooting"
-            sleep 1
-            reboot
-            ;;
-        * )
-            echo "Okay. Please reboot later to apply the changes."
-            ;;
-    esac
+    ok "Display manager switched to $target_dm"
 }
 
+# -----------------------------
+# Status
+# -----------------------------
 show_status() {
-    echo "=== Desktop Sessions ==="
+    echo -e "${BLUE}=== Desktop Sessions ===${RESET}"
     detect_installed_des
     echo
-    echo "=== Display Manager ==="
-    if systemctl status display-manager >/dev/null 2>&1; then
-        systemctl status display-manager | grep -E 'Loaded:|Active:'
-    else
-        echo "No active display-manager service detected."
-    fi
+
+    echo -e "${BLUE}=== Display Managers ===${RESET}"
+    detect_installed_dm
+    echo
+
+    echo -e "${BLUE}=== Active Display Manager ===${RESET}"
+    systemctl status display-manager | grep -E 'Loaded:|Active:' || warn "No active display manager detected."
 }
 
+# -----------------------------
+# Help
+# -----------------------------
 usage() {
-    cat <<EOF
+cat <<EOF
 switchdesk - Universal Desktop Environment Manager
 
 Usage:
   switchdesk status
-      Show installed desktop sessions and display manager status.
-
   switchdesk install <de>
-      Install a desktop environment.
-      Supported: gnome, kde, xfce, cinnamon, mate, lxqt
-
   switchdesk switch <de>
-      Switch display manager to match the target DE.
-      Prompts for reboot.
-      Supported: gnome, kde, xfce, cinnamon, mate, lxqt
+  switchdesk --version
+  switchdesk --help
 
-Examples:
-  sudo switchdesk status
-  sudo switchdesk install kde
-  sudo switchdesk switch kde
-
+Supported desktop environments:
+  gnome, kde, xfce, cinnamon, mate, lxqt
 EOF
 }
 
+# -----------------------------
+# Main
+# -----------------------------
 main() {
     require_root
     detect_pkg_manager
 
     case "$1" in
-        status)
-            show_status
-            ;;
-        install)
-            [ -z "$2" ] && usage && exit 1
-            install_de "$2"
-            ;;
-        switch)
-            [ -z "$2" ] && usage && exit 1
-            switch_dm_for_de "$2"
-            ;;
-        *)
-            usage
-            ;;
+        status) show_status ;;
+        install) install_de "$2" ;;
+        switch) switch_dm_for_de "$2" ;;
+        --version) echo "switchdesk v1.0 by zengmax68" ;;
+        --help|"") usage ;;
+        *) usage ;;
     esac
 }
 
