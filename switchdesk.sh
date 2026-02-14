@@ -7,11 +7,6 @@
 #   - Detect installed desktop sessions
 #   - Install common DEs (GNOME, KDE, XFCE, Cinnamon, MATE, LXQt)
 #   - Switch display manager to match target DE
-#   - Clean reboot prompt:
-#       Desktop switched, please save your work and reboot.
-#       Reboot now? [y/n]
-#       y
-#       Rebooting
 
 set -e
 
